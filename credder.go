@@ -1,81 +1,167 @@
 package main
 
 import (
-	"io"
-	"net/http"
-	"log"
+	"fmt"
+	"github.com/donfranke/algo"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"regexp"
 	"strings"
 	"time"
-	"regexp"
 )
 
+var encKey string
+
+const C_MONGODB = "127.0.0.1"
+const C_ERROR_MESSAGE = "NOTFOUND"
+
 type Cred struct {
-	EntryID string
+	ID         string
 	SecretInfo string
 }
 type Algo struct {
-	ID string
-	Seq string
+	ID  string
+	Key string
 }
 
 type LogEvent struct {
-	Timestamp time.Time
+	Timestamp        time.Time
 	EventDescription string
 }
 
-func FindServer(w http.ResponseWriter, r *http.Request) {
+// use this web service call to get a specific encryption key
+func KeyServer(w http.ResponseWriter, r *http.Request) {
 
-	entryID := r.URL.Query().Get("id")	
-	encodedRequest := r.URL.Query().Get("req")
-	fmt.Printf("Encoded request: %s\n",encodedRequest)
-	ra := r.RemoteAddr
-	remoteIP := ""
-	ipv4regex := "(\\d{1,3}\\.){3}\\d{1,3}\\:\\d{1,5}"
-	rx, _ := regexp.Compile(ipv4regex)
-	//remoteIP := ""
-	if(rx.MatchString(ra)) {
-		i := strings.Index(ra, ":")
-		remoteIP = ra[0:i]
+	// fetch values from request
+	keyID := r.URL.Query().Get("keyid")
+	appName := r.URL.Query().Get("appname")
+	remoteIP := ExtractIP(r.RemoteAddr)
+	userAgent := r.Header.Get("User-Agent")
+
+	// log event
+	eventdesc := "Request received for key " + keyID + " (" + remoteIP + " " + userAgent + ") from " + appName
+	logEvent(eventdesc)
+
+	// 1. make sure request is legit
+	result := validateKeyRequest(keyID, appName, remoteIP, userAgent)
+	fmt.Printf("Key request validation result: %d\n", result)
+
+	// 2. get key (if validation passed)
+	if result>0  {
+		encKey = getKey(keyID)
 	} else {
-		remoteIP = "0.0.0.0"
+		encKey = C_ERROR_MESSAGE
 	}
-	fmt.Printf("  Remote IP: %s\n",remoteIP)
 	
-	fmt.Println("  User Agent: ",r.Header.Get("User-Agent"))
-	eventdesc := "Request received for "+entryID+" ("+r.RemoteAddr+" "+r.Header.Get("User-Agent")+")"
+	io.WriteString(w, "{\"key\":\""+encKey+"\"}")
+}
+
+// use this web service call to retrieve a specific credential document
+func CredServer(w http.ResponseWriter, r *http.Request) {
+	var result string
+	// fetch values from request
+	credID := r.URL.Query().Get("credid")
+	appName := r.URL.Query().Get("appname")
+	remoteIP := ExtractIP(r.RemoteAddr)
+	userAgent := r.Header.Get("User-Agent")
+
+	// log event
+	eventdesc := "Request received for cred " + credID + " (" + remoteIP + " " + userAgent + ") from " + appName
 	logEvent(eventdesc)
 
 	var resultString string
-	if (entryID!="" ) {
-		algo := getAlgo()
-		// decode request
-		//decodedrequest = decode(algo,encodedrequest)
-		fmt.Printf("Encoding sequence to use: %s\n",algo)
-		result := getCreds(entryID)
-		resultString = "{\"entryid\":\"" + entryID + "\",\"secretinfo\":\"" + result + "\"}"
+
+	// 1. validate request 
+	validateresult := validateCredRequest(credID, appName, remoteIP, userAgent)
+	fmt.Printf("Cred request validation result: %d\n", validateresult)
+
+	if validateresult>0 {
+		// display info
+		fmt.Printf("=== CRED ===\n")
+		fmt.Printf("\tCred ID: %s\n", credID)
+		fmt.Printf("\tApp name: %s\n", appName)
+		fmt.Printf("\tRemote IP: %s\n", remoteIP)
+		fmt.Printf("\tUser Agent: %s\n", userAgent)
+
+		result = getCreds(credID)
+		resultString = "{\"entryid\":\"" + credID + "\",\"secretinfo\":\"" + result + "\"}"
 	} else {
-		resultString = "{\"entryid\":\"" + entryID + "\",\"secretinfo\":\"not found\"}"
+		resultString = "{\"entryid\":\"" + credID + "\",\"secretinfo\":\"" + C_ERROR_MESSAGE + "\"}"
 	}
+	fmt.Printf("Sent to client: %s\n", resultString)
 	io.WriteString(w, resultString)
+
+	// decrypt  <-- DEBUG
+	//plaintext := decryptValue(encKey,result)
+	//fmt.Printf("Plaintext: %s\n",plaintext)
 }
 
 func main() {
 	webserverport := "8888"
-	http.HandleFunc("/find", FindServer)
-	//err := http.ListenAndServeTLS(":443", "server.crt", "server.key", nil)
-	err := http.ListenAndServe(":" + webserverport, nil)
+
+	// init handlers
+	http.HandleFunc("/cred", CredServer)
+	http.HandleFunc("/key", KeyServer)
+	fmt.Printf("Web service started on port %s\n", webserverport)
+
+	err := http.ListenAndServe(":"+webserverport, nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
-	fmt.Println("Web server running on port %d\n",webserverport)
+	fmt.Println("Web server running on port %d\n", webserverport)
 }
 
+func validateKeyRequest(keyID string, appName string, remoteIP string, userAgent string) int {
+	fmt.Printf("=== KEY VALIDATE ===\n")
+	fmt.Printf("\tKey ID: %s\n", keyID)
+	fmt.Printf("\tApp name: %s\n", appName)
+	fmt.Printf("\tRemote IP: %s\n", remoteIP)
+	fmt.Printf("\tUser Agent: %s\n", userAgent)
+	
+	session, err := mgo.Dial(C_MONGODB)
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+	session.SetMode(mgo.Monotonic, true)
 
+	c := session.DB("credder").C("keyprivs")
 
-func getAlgo() string {
+	rscount, err := c.Find(bson.M{"keyid": keyID, "appname": appName, "remoteip": remoteIP, "useragent": userAgent}).Count()
+	if err != nil {
+		fmt.Printf("Key Request Validation ERROR: %s\n", err)
+	}
+	return rscount
+}
+
+func validateCredRequest(credID string, appName string, remoteIP string, userAgent string) int {
+	fmt.Printf("=== CRED VALIDATE ===\n")
+	fmt.Printf("\tCred ID: %s\n", credID)
+	fmt.Printf("\tApp name: %s\n", appName)
+	fmt.Printf("\tRemote IP: %s\n", remoteIP)
+	fmt.Printf("\tUser Agent: %s\n", userAgent)
+	
+	session, err := mgo.Dial(C_MONGODB)
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+	session.SetMode(mgo.Monotonic, true)
+
+	c := session.DB("credder").C("credprivs")
+
+	rscount, err := c.Find(bson.M{"credid": credID, "appname": appName, "remoteip": remoteIP, "useragent": userAgent}).Count()
+	if err != nil {
+		fmt.Printf("Cred Request Validation ERROR: %s\n", err)
+	}
+	return rscount
+}
+
+// retrieve encryption key from database
+func getKey(id string) string {
 	session, err := mgo.Dial("127.0.0.1")
 	if err != nil {
 		panic(err)
@@ -86,14 +172,14 @@ func getAlgo() string {
 	c := session.DB("credder").C("algo")
 
 	result := Algo{}
-	err = c.Find(bson.M{"id": 1}).One(&result)
+	err = c.Find(bson.M{"id": id}).One(&result)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("ERROR: %s\n", err)
 	}
-	return result.Seq
-	
+	return result.Key
 }
 
+//
 func getCreds(id string) string {
 	session, err := mgo.Dial("127.0.0.1")
 	if err != nil {
@@ -105,13 +191,11 @@ func getCreds(id string) string {
 	c := session.DB("credder").C("creds")
 
 	result := Cred{}
-	err = c.Find(bson.M{"entryid": id}).One(&result)
+	err = c.Find(bson.M{"id": id}).One(&result)
 	if err != nil {
-	//        log.Fatal(err)
-		fmt.Println(err)
+		fmt.Printf("ERROR: %s\n", err)
 	}
 	return result.SecretInfo
-	//fmt.Println("SecretInfo:", result.SecretInfo)
 }
 
 func logEvent(event string) {
@@ -123,11 +207,47 @@ func logEvent(event string) {
 	session.SetMode(mgo.Monotonic, true)
 
 	c := session.DB("credder").C("eventlog")
-	err = c.Insert(&LogEvent{time.Now(),event})
+	err = c.Insert(&LogEvent{time.Now(), event})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Event has been logged")
+	fmt.Printf("=== Event logged: %s\n",event)
 }
 
+func ExtractIP(ip string) string {
+	ipv4regex := "(\\d{1,3}\\.){3}\\d{1,3}\\:\\d{1,5}"
+	rx, _ := regexp.Compile(ipv4regex)
+	if rx.MatchString(ip) {
+		i := strings.Index(ip, ":")
+		ip = ip[0:i]
+	} else {
+		ip = "0.0.0.0"
+	}
+	return ip
+}
 
+// for debug purposes
+func encryptValue(enckey string, plaintext string) string {
+	fmt.Println("Key: ", enckey)
+	v, ok := algo.NewVigenère(enckey)
+	if !ok {
+		fmt.Println("Invalid key")
+		return "unknown"
+	}
+	fmt.Println("Plain text:", plaintext)
+	ct := v.Encipher(plaintext)
+	return ct
+}
+
+// for debug purposes
+func decryptValue(enckey string, ciphertext string) string {
+	fmt.Println("Key: ", enckey)
+	v, ok := algo.NewVigenère(enckey)
+	if !ok {
+		fmt.Println("Invalid key")
+		return "unknown"
+	}
+	fmt.Println("Cipher text:", ciphertext)
+	plaintext, ok := v.Decipher(ciphertext)
+	return plaintext
+}
