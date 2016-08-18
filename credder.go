@@ -21,6 +21,7 @@ const C_ERROR_MESSAGE = "NOTFOUND"
 type Cred struct {
 	ID         string
 	SecretInfo string
+	KeyID      string
 }
 type Algo struct {
 	ID  string
@@ -34,10 +35,13 @@ type LogEvent struct {
 
 // use this web service call to get a specific encryption key
 func KeyServer(w http.ResponseWriter, r *http.Request) {
+	var resultString string
 
+	// expecting POST
+	r.ParseForm()
 	// fetch values from request
-	keyID := r.URL.Query().Get("keyid")
-	appName := r.URL.Query().Get("appname")
+	keyID := r.FormValue("keyid")
+	appName := r.FormValue("appname")
 	remoteIP := ExtractIP(r.RemoteAddr)
 	userAgent := r.Header.Get("User-Agent")
 
@@ -55,16 +59,19 @@ func KeyServer(w http.ResponseWriter, r *http.Request) {
 	} else {
 		encKey = C_ERROR_MESSAGE
 	}
+	resultString = "{\"key\":\""+encKey+"\"}"
 	
-	io.WriteString(w, "{\"key\":\""+encKey+"\"}")
+	io.WriteString(w, resultString)
+	fmt.Printf("Sent to client: %s\n", resultString)
+
 }
 
 // use this web service call to retrieve a specific credential document
 func CredServer(w http.ResponseWriter, r *http.Request) {
-	var result string
+	var result Cred
 	// fetch values from request
-	credID := r.URL.Query().Get("credid")
-	appName := r.URL.Query().Get("appname")
+	credID := r.FormValue("credid")
+	appName := r.FormValue("appname")
 	remoteIP := ExtractIP(r.RemoteAddr)
 	userAgent := r.Header.Get("User-Agent")
 
@@ -80,16 +87,16 @@ func CredServer(w http.ResponseWriter, r *http.Request) {
 
 	if validateresult>0 {
 		// display info
-		fmt.Printf("=== CRED ===\n")
+		fmt.Printf("=== CRED and KEY ID ===\n")
 		fmt.Printf("\tCred ID: %s\n", credID)
 		fmt.Printf("\tApp name: %s\n", appName)
 		fmt.Printf("\tRemote IP: %s\n", remoteIP)
 		fmt.Printf("\tUser Agent: %s\n", userAgent)
 
 		result = getCreds(credID)
-		resultString = "{\"entryid\":\"" + credID + "\",\"secretinfo\":\"" + result + "\"}"
+		resultString = "{\"secretinfo\":\"" + result.SecretInfo + "\",\"keyid\":\"" + result.KeyID + "\"}"
 	} else {
-		resultString = "{\"entryid\":\"" + credID + "\",\"secretinfo\":\"" + C_ERROR_MESSAGE + "\"}"
+		resultString = "{\"secretinfo\":\"" + C_ERROR_MESSAGE + "\"}"
 	}
 	fmt.Printf("Sent to client: %s\n", resultString)
 	io.WriteString(w, resultString)
@@ -108,6 +115,8 @@ func main() {
 	fmt.Printf("Web service started on port %s\n", webserverport)
 
 	err := http.ListenAndServe(":"+webserverport, nil)
+	//err := http.ListenAndServeTLS(":443", "server.crt", "server.key", nil)
+
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
@@ -115,7 +124,7 @@ func main() {
 }
 
 func validateKeyRequest(keyID string, appName string, remoteIP string, userAgent string) int {
-	fmt.Printf("=== KEY VALIDATE ===\n")
+	fmt.Printf("=== VALIDATE KEY REQUEST ===\n")
 	fmt.Printf("\tKey ID: %s\n", keyID)
 	fmt.Printf("\tApp name: %s\n", appName)
 	fmt.Printf("\tRemote IP: %s\n", remoteIP)
@@ -138,7 +147,7 @@ func validateKeyRequest(keyID string, appName string, remoteIP string, userAgent
 }
 
 func validateCredRequest(credID string, appName string, remoteIP string, userAgent string) int {
-	fmt.Printf("=== CRED VALIDATE ===\n")
+	fmt.Printf("=== VALIDATE CRED REQUEST ===\n")
 	fmt.Printf("\tCred ID: %s\n", credID)
 	fmt.Printf("\tApp name: %s\n", appName)
 	fmt.Printf("\tRemote IP: %s\n", remoteIP)
@@ -162,14 +171,14 @@ func validateCredRequest(credID string, appName string, remoteIP string, userAge
 
 // retrieve encryption key from database
 func getKey(id string) string {
-	session, err := mgo.Dial("127.0.0.1")
+	session, err := mgo.Dial(C_MONGODB)
 	if err != nil {
 		panic(err)
 	}
 	defer session.Close()
 	session.SetMode(mgo.Monotonic, true)
 
-	c := session.DB("credder").C("algo")
+	c := session.DB("credder").C("keys")
 
 	result := Algo{}
 	err = c.Find(bson.M{"id": id}).One(&result)
@@ -180,8 +189,8 @@ func getKey(id string) string {
 }
 
 //
-func getCreds(id string) string {
-	session, err := mgo.Dial("127.0.0.1")
+func getCreds(id string) Cred {
+	session, err := mgo.Dial(C_MONGODB)
 	if err != nil {
 		panic(err)
 	}
@@ -195,11 +204,11 @@ func getCreds(id string) string {
 	if err != nil {
 		fmt.Printf("ERROR: %s\n", err)
 	}
-	return result.SecretInfo
+	return result
 }
 
 func logEvent(event string) {
-	session, err := mgo.Dial("127.0.0.1")
+	session, err := mgo.Dial(C_MONGODB)
 	if err != nil {
 		panic(err)
 	}
@@ -211,7 +220,7 @@ func logEvent(event string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("=== Event logged: %s\n",event)
+	fmt.Printf("Event logged: %s\n\n",event)
 }
 
 func ExtractIP(ip string) string {
