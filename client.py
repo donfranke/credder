@@ -6,19 +6,24 @@ import requests
 
 C_APPNAME = "client.py"
 resourceName = "vertica1"
-C_CREDAPIURL = "http://127.0.0.1:8888/"
+C_CREDAPIURL = "http://127.0.0.1:8889/"
 
 # 1. get key
 if(len(sys.argv)<1):
 	sys.exit(0)
 
 credid = sys.argv[1]
+keyid = ""
 
 # 1. get creds and associated key id
 r = requests.post(C_CREDAPIURL + "cred", data = {"credid":credid, "appname":C_APPNAME})
 data = r.json()
 ciphertext = data["secretinfo"]
-keyid = data["keyid"]
+try:
+	keyid = data["keyid"]
+except KeyError:
+	    print("ERROR: Could not retrieve key id from cred request")
+
 print("CRED: " + ciphertext)
 
 # 2. get key
@@ -26,9 +31,6 @@ r = requests.post(C_CREDAPIURL + "key", data = {"keyid":keyid, "appname":C_APPNA
 data = r.json()
 key = data["key"]
 print("KEY: " + key)
-
-
-
 
 #jsonresponse = response.read()
 #print jsonresponse

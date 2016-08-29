@@ -1,2 +1,0 @@
-# credder
-Credential access API
