@@ -5,7 +5,6 @@ import sys
 import requests
 
 C_APPNAME = "client.py"
-resourceName = "vertica1"
 C_CREDAPIURL = "http://127.0.0.1:8889/"
 
 # 1. get key
@@ -16,21 +15,30 @@ credid = sys.argv[1]
 keyid = ""
 
 # 1. get creds and associated key id
-r = requests.post(C_CREDAPIURL + "cred", data = {"credid":credid, "appname":C_APPNAME})
-data = r.json()
-ciphertext = data["secretinfo"]
+#r = requests.post(C_CREDAPIURL + "cred", data = {"Credid":credid, "Appname":C_APPNAME})
+
+payload = {'Credid':credid,'Appname':C_APPNAME}
+response = requests.post(C_CREDAPIURL + "cred", data=json.dumps(payload))
+data = response.json()
+
 try:
-	keyid = data["keyid"]
+	secretinfo = data['secretinfo']
+	keyid = data['keyid']
+
 except KeyError:
 	    print("ERROR: Could not retrieve key id from cred request")
 
-print("CRED: " + ciphertext)
+print(" >> SECRETINFO: " + secretinfo)
+print(" >> KEYID: " + keyid)
 
 # 2. get key
-r = requests.post(C_CREDAPIURL + "key", data = {"keyid":keyid, "appname":C_APPNAME})
-data = r.json()
-key = data["key"]
-print("KEY: " + key)
+payload = {'Keyid':keyid,'Appname':C_APPNAME}
+
+response = requests.post(C_CREDAPIURL + "key", data=json.dumps(payload))
+data = response.json()
+
+key = data['key']
+print(" >> KEY: " + key)
 
 #jsonresponse = response.read()
 #print jsonresponse
@@ -47,6 +55,11 @@ print("KEY: " + key)
 #ciphertext = data['secretinfo']
 #print "Ciphertext: " + ciphertext
 
-decr = decrypt(ciphertext, key)
+#secretinfo = "somepassword"
+#key = "USWASEUTNEBS"
+decr = decrypt(secretinfo, key)
 print "Plaintext: " + decr
 
+# ========================
+enc = encrypt("REVEALED","NESWABKBQMGOWDYIOKRE")
+print enc

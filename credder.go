@@ -1,5 +1,7 @@
 package main
 
+// cred request: curl -H "Content-Type: application/json" -X POST -d "{\"Credid\":\"1\",\"Appname\":\"client.py\"}" http://localhost:8889/cred
+
 import (
 	"fmt"
 	"github.com/donfranke/algo"
@@ -37,6 +39,11 @@ type CredRequest struct {
 	Appname string
 } 
 
+type KeyRequest struct {
+	Keyid      string
+	Appname    string
+}
+
 type LogEvent struct {
 	Timestamp        time.Time
 	EventDescription string
@@ -67,9 +74,18 @@ func KeyServer(w http.ResponseWriter, r *http.Request) {
 
 	// expecting POST
 	r.ParseForm()
+	var request KeyRequest
+
+	err := json.NewDecoder(r.Body).Decode(&request)
+    if err != nil {
+       // handle error
+    }
+    log.Printf("%#v", request) // lo
+
 	// fetch values from request
-	keyID := r.FormValue("keyid")
-	appName := r.FormValue("appname")
+	keyID := request.Keyid
+	appName := request.Appname
+
 	remoteIP := ExtractIP(r.RemoteAddr)
 	userAgent := r.Header.Get("User-Agent")
 
@@ -99,16 +115,21 @@ func CredServer(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
     w.Header().Set("Access-Control-Allow-Origin", "*")
 	
+	var request CredRequest
 	var result Cred
 	r.ParseForm()
 
+	err := json.NewDecoder(r.Body).Decode(&request)
+    if err != nil {
+       // handle error
+    }
+    log.Printf("%#v", request) // lo
+
 	// fetch values from request
-	credID := r.FormValue("credid")
-	appName := r.FormValue("appname")
+	credID := request.Credid
+	appName := request.Appname
 	remoteIP := ExtractIP(r.RemoteAddr)
 	userAgent := r.Header.Get("User-Agent")
-
-	fmt.Printf("App Name: %s\n",appName)
 
 	// log event
 	eventdesc := "Request received for cred " + credID + " (" + remoteIP + " " + userAgent + ") from " + appName
@@ -129,7 +150,7 @@ func CredServer(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("\tUser Agent: %s\n", userAgent)
 
 		result = getCreds(credID)
-		resultString = "[{\"credid\":\"" + credID + "\",\"secretinfo\":\"" + result.SecretInfo + "\",\"keyid\":\"" + result.KeyID + "\"}]"
+		resultString = "{\"credid\":\"" + credID + "\",\"secretinfo\":\"" + result.SecretInfo + "\",\"keyid\":\"" + result.KeyID + "\"}"
 		//resultString += ",{\"credid\":\"" + credID + "\",\"secretinfo\":\"" + result.SecretInfo + "\",\"keyid\":\"" + result.KeyID + "\"}"
 	} else {
 		resultString = "{\"secretinfo\":\"" + C_ERROR_MESSAGE + "\"}"
