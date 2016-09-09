@@ -3,7 +3,6 @@ Credential access API
 # Description
 Proof of concept credential management repository and service. To be used by apps and scripts to get credentials to protected resources like databases. Avoids hard-coding credentials.
 
-
 # Dependencies
 * Service is credder.go
 * Sample client is client.py
